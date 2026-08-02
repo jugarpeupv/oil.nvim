@@ -54,6 +54,13 @@ local default_config = {
   -- Constrain the cursor to the editable parts of the oil buffer
   -- Set to `false` to disable, or "name" to keep it on the file names
   constrain_cursor = 'editable',
+  -- Display a header line at the top of the oil buffer showing the current directory
+  header = {
+    -- Show the cwd of the oil buffer as the first line of the buffer
+    cwd = false,
+    -- How to display the cwd. "short" uses ~/ for the home directory, "full" shows the absolute path
+    format = 'short', -- "short"|"full"
+  },
   -- Set to true to watch the filesystem for changes and reload oil
   watch_for_changes = false,
   -- Keymaps in oil buffer. Can be any value that `vim.keymap.set` accepts OR a table of keymap
@@ -78,6 +85,7 @@ local default_config = {
     ['gs'] = { 'actions.change_sort', mode = 'n' },
     ['gx'] = 'actions.open_external',
     ['g.'] = { 'actions.toggle_hidden', mode = 'n' },
+    ['gh'] = { 'actions.toggle_header', mode = 'n' },
     ['g\\'] = { 'actions.toggle_trash', mode = 'n' },
   },
   -- Set to false to disable all of the above keymaps
@@ -258,6 +266,7 @@ default_config.view_options.highlight_filename = nil
 ---@field lsp_file_methods oil.LspFileMethods
 ---@field constrain_cursor false|"name"|"editable"
 ---@field watch_for_changes boolean
+---@field header oil.HeaderConfig
 ---@field keymaps table<string, any>
 ---@field use_default_keymaps boolean
 ---@field view_options oil.ViewOptions
@@ -295,6 +304,7 @@ local M = {}
 ---@field lsp_file_methods? oil.SetupLspFileMethods Configure LSP file operation integration.
 ---@field constrain_cursor? false|"name"|"editable" Constrain the cursor to the editable parts of the oil buffer. Set to `false` to disable, or "name" to keep it on the file names.
 ---@field watch_for_changes? boolean Set to true to watch the filesystem for changes and reload oil.
+---@field header? oil.SetupHeaderConfig Display a header line at the top of the oil buffer.
 ---@field keymaps? table<string, any>
 ---@field use_default_keymaps? boolean Set to false to disable all of the above keymaps
 ---@field view_options? oil.SetupViewOptions Configure which files are shown and how they are shown.
@@ -311,6 +321,14 @@ local M = {}
 ---@field progress? oil.SetupProgressWindowConfig Configuration for the floating progress window
 ---@field ssh? oil.SetupSimpleWindowConfig Configuration for the floating SSH window
 ---@field keymaps_help? oil.SetupSimpleWindowConfig Configuration for the floating keymaps help window
+
+---@class (exact) oil.HeaderConfig
+---@field cwd boolean Show the cwd of the oil buffer as the first line of the buffer
+---@field format "short"|"full" How to display the cwd. "short" uses ~/ for the home directory, "full" shows the absolute path
+
+---@class (exact) oil.SetupHeaderConfig
+---@field cwd? boolean Show the cwd of the oil buffer as the first line of the buffer
+---@field format? "short"|"full" How to display the cwd. "short" uses ~/ for the home directory, "full" shows the absolute path
 
 ---@class (exact) oil.LspFileMethods
 ---@field enabled boolean

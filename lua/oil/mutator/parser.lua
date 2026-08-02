@@ -195,10 +195,11 @@ M.parse = function(bufnr)
     end
   end
 
-  for i, line in ipairs(lines) do
+  for i = view.header_lines(bufnr) + 1, #lines do
     -- hack to be compatible with Lua 5.1
     -- use return instead of goto
     (function()
+      local line = lines[i]
       if line:match('^/%d+') then
         -- Parse the line for an existing entry
         local result, err = M.parse_line(adapter, line, column_defs)

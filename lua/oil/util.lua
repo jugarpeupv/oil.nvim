@@ -932,6 +932,45 @@ M.get_edit_path = function(bufnr, entry, callback)
   end
 end
 
+---Navigate to the directory shown on the cwd header line of an oil buffer.
+---The header line behaves like a "../" entry, so this is used by select and
+---by the insert-mode <CR> mapping on the header line.
+---@param bufnr integer
+---@param check_exists? boolean Warn if the target directory does not exist
+---@return boolean true if the header line was handled
+M.navigate_to_header_path = function(bufnr, check_exists)
+  local view = require('oil.view')
+  if not view.is_header_line(bufnr, 1) then
+    return false
+  end
+  local bufname = vim.api.nvim_buf_get_name(bufnr)
+  local scheme = M.parse_url(bufname)
+  local line = vim.api.nvim_buf_get_lines(bufnr, 0, 1, true)[1] or ''
+  local path = vim.fn.expand(vim.trim(line))
+  if path == '' then
+    return true
+  end
+  if check_exists then
+    local adapter = M.get_adapter(bufnr)
+    if adapter and adapter.name == 'files' and vim.fn.isdirectory(path) ~= 1 then
+      vim.notify(string.format('Directory does not exist: %s', path), vim.log.levels.WARN)
+      return true
+    end
+  end
+  if not scheme then
+    return true
+  end
+  local fs = require('oil.fs')
+  local target = scheme .. fs.os_to_posix_path(vim.fn.fnamemodify(path, ':p'))
+  if not vim.endswith(target, '/') then
+    target = target .. '/'
+  end
+  if target ~= bufname then
+    vim.cmd.edit({ args = { M.escape_filename(target) }, mods = { keepalt = true } })
+  end
+  return true
+end
+
 --- Check for an icon provider and return a common icon provider API
 ---@return (oil.IconProvider)?
 M.get_icon_provider = function()

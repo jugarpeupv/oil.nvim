@@ -14,6 +14,8 @@ local FIELD_NAME = constants.FIELD_NAME
 local FIELD_TYPE = constants.FIELD_TYPE
 local FIELD_META = constants.FIELD_META
 
+-- Prepended to the cwd header line when the buffer has unsaved changes
+
 -- map of path->last entry under cursor
 local last_cursor_entry = {}
 
@@ -101,6 +103,75 @@ M.toggle_hidden = function()
     vim.notify('Cannot toggle hidden files when you have unsaved changes', vim.log.levels.WARN)
   else
     config.view_options.show_hidden = not config.view_options.show_hidden
+    M.rerender_all_oil_buffers({ refetch = false })
+  end
+end
+
+---Get the cwd path for the header line, or nil if no header should be shown
+---@param bufnr integer
+---@return nil|string
+M.get_header_path = function(bufnr)
+  if not config.header.cwd then
+    return nil
+  end
+  local bufname = vim.api.nvim_buf_get_name(bufnr)
+  local scheme, path = util.parse_url(bufname)
+  local adapter = scheme and config.get_adapter_by_scheme(scheme)
+  if not adapter or not path then
+    return nil
+  end
+  -- Only adapters with a local path (files and the files-like test adapter) have a meaningful cwd
+  if adapter.name ~= 'files' and adapter.name ~= 'test' then
+    return nil
+  end
+  local text = path
+  if adapter.name == 'files' then
+    text = fs.posix_to_os_path(path)
+  end
+  -- Trim the trailing slash, but keep the separator for the root path
+  if text:len() > 1 then
+    text = text:gsub('[/\\]$', '')
+  end
+  if config.header.format == 'short' and adapter.name == 'files' then
+    text = vim.fn.fnamemodify(text, ':~')
+  end
+  if text == '' then
+    return nil
+  end
+  return text
+end
+
+---Get the text for the cwd header line, or nil if no header should be shown
+---@param bufnr integer
+---@return nil|string
+M.get_header_text = function(bufnr)
+  return M.get_header_path(bufnr)
+end
+
+---@param bufnr integer
+---@param lnum integer
+---@return boolean Whether this line is the cwd header line
+M.is_header_line = function(bufnr, lnum)
+  return lnum == 1 and M.get_header_text(bufnr) ~= nil
+end
+
+---Number of header lines rendered at the top of the buffer
+---@param bufnr integer
+---@return integer
+M.header_lines = function(bufnr)
+  if M.get_header_text(bufnr) then
+    return 1
+  else
+    return 0
+  end
+end
+
+M.toggle_header = function()
+  local any_modified = are_any_modified()
+  if any_modified then
+    vim.notify('Cannot toggle the header when you have unsaved changes', vim.log.levels.WARN)
+  else
+    config.header.cwd = not config.header.cwd
     M.rerender_all_oil_buffers({ refetch = false })
   end
 end
@@ -513,6 +584,25 @@ local function setup_insert_constraints(bufnr)
   vim.keymap.set('i', '<C-w>', make_cw_rhs(bufnr), opts)
 end
 
+---On the cwd header line, <CR> in insert mode navigates to the path shown on
+---the line instead of inserting a new line
+---@param bufnr integer
+local function setup_header_insert_mapping(bufnr)
+  vim.keymap.set('i', '<CR>', function()
+    local cur = vim.api.nvim_win_get_cursor(0)
+    if not M.is_header_line(bufnr, cur[1]) then
+      -- <C-j> inserts a line break without re-triggering this mapping
+      return '<C-j>'
+    end
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(bufnr) then
+        require('oil.util').navigate_to_header_path(bufnr, true)
+      end
+    end)
+    return '<Esc>'
+  end, { buffer = bufnr, expr = true, nowait = true, silent = true })
+end
+
 ---Redraw original path virtual text for trash buffer
 ---@param bufnr integer
 local function redraw_trash_virtual_text(bufnr)
@@ -593,6 +683,10 @@ M.reapply_highlights = function(bufnr)
     end
   end
   local _, highlights = util.render_table(line_table, col_width, col_align)
+  local header_text = M.get_header_text(bufnr)
+  if header_text then
+    table.insert(highlights, 1, { 'OilHeader', 0, 0, vim.api.nvim_strwidth(header_text) })
+  end
   util.set_highlights(bufnr, highlights)
 end
 
@@ -842,6 +936,7 @@ M.initialize = function(bufnr)
   end)
   keymap_util.set_keymaps(config.keymaps, bufnr)
   setup_insert_constraints(bufnr)
+  setup_header_insert_mapping(bufnr)
 end
 
 ---@param adapter oil.Adapter
@@ -979,6 +1074,11 @@ local function render_buffer(bufnr, opts)
   end
 
   local lines, highlights = util.render_table(line_table, col_width, col_align)
+  local header_text = M.get_header_text(bufnr)
+  if header_text then
+    table.insert(lines, 1, header_text)
+    table.insert(highlights, 1, { 'OilHeader', 0, 0, vim.api.nvim_strwidth(header_text) })
+  end
 
   _rendering[bufnr] = true
   vim.bo[bufnr].modifiable = true
@@ -992,11 +1092,12 @@ local function render_buffer(bufnr, opts)
 
   if opts.jump then
     -- TODO why is the schedule necessary?
+    local header_offset = header_text and 1 or 0
     vim.schedule(function()
       for _, winid in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_buf(winid) == bufnr then
           if jump_idx then
-            local lnum = jump_idx
+            local lnum = jump_idx + header_offset
             local line = vim.api.nvim_buf_get_lines(bufnr, lnum - 1, lnum, true)[1]
             local id_str = line:match('^/(%d+)')
             local id = tonumber(id_str)

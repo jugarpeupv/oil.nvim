@@ -41,6 +41,10 @@ M.get_entry_on_line = function(bufnr, lnum)
   if vim.bo[bufnr].filetype ~= 'oil' then
     return nil
   end
+  local view = require('oil.view')
+  if view.is_header_line(bufnr, lnum) then
+    return nil
+  end
   local adapter = util.get_adapter(bufnr)
   if not adapter then
     return nil
@@ -804,8 +808,14 @@ M.select = function(opts, callback)
   end
 
   local visual_range = util.get_visual_range()
+  local view = require('oil.view')
+  local cursor_lnum = vim.api.nvim_win_get_cursor(0)[1]
+  if not visual_range and view.is_header_line(0, cursor_lnum) then
+    -- The cwd header line behaves like a "../" entry: navigate to the path shown on the line
+    util.navigate_to_header_path(0)
+    return finish()
+  end
 
-  ---@type oil.Entry[]
   local entries = {}
   if visual_range then
     for i = visual_range.start_lnum, visual_range.end_lnum do
@@ -1025,6 +1035,11 @@ M._get_highlights = function()
       name = 'OilEmpty',
       link = 'Comment',
       desc = 'Empty column values',
+    },
+    {
+      name = 'OilHeader',
+      link = 'Title',
+      desc = 'The cwd header line at the top of an oil buffer',
     },
     {
       name = 'OilHidden',

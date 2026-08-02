@@ -255,6 +255,13 @@ M.toggle_hidden = {
   end,
 }
 
+M.toggle_header = {
+  desc = 'Toggle the cwd header line',
+  callback = function()
+    require('oil.view').toggle_header()
+  end,
+}
+
 M.open_terminal = {
   desc = 'Open a terminal in the current directory',
   callback = function()
