@@ -690,6 +690,27 @@ M.is_oil_bufnr = function(bufnr)
   return config.adapters[scheme] or config.adapter_aliases[scheme]
 end
 
+---Strict, name-based check: is this buffer really an oil buffer?
+---Unlike is_oil_bufnr this ignores the filetype, so it is immune to a
+---normal buffer whose filetype was poisoned to "oil" (e.g. by a
+---`doautocmd BufReadPost <oil-url>` fired while the normal buffer was
+---current, which makes filetype detection run against the oil url).
+---@param bufnr? integer Defaults to current buffer
+---@return boolean
+M.is_oil_bufnr_strict = function(bufnr)
+  if bufnr == nil or bufnr == 0 then
+    bufnr = vim.api.nvim_get_current_buf()
+  end
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+  local scheme = M.parse_url(vim.api.nvim_buf_get_name(bufnr))
+  if scheme == nil then
+    return false
+  end
+  return config.adapters[scheme] ~= nil or config.adapter_aliases[scheme] ~= nil
+end
+
 ---This is a hack so we don't end up in insert mode after starting a task
 ---@param prev_mode string The vim mode we were in before opening a terminal
 M.hack_around_termopen_autocmd = function(prev_mode)

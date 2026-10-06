@@ -280,8 +280,36 @@ M.rerender_all_oil_buffers = function(opts, callback)
   end
 end
 
-M.set_win_options = function()
-  local winid = vim.api.nvim_get_current_win()
+M.set_win_options = function(winid)
+  winid = winid or vim.api.nvim_get_current_win()
+  if not vim.api.nvim_win_is_valid(winid) then
+    return
+  end
+  -- Only ever apply oil window options to a window that is really showing an
+  -- oil buffer (checked by buffer *name*, not filetype: a normal buffer can
+  -- have a poisoned filetype of "oil" if a `doautocmd BufReadPost <oil-url>`
+  -- ran while it was current).
+  local winbuf = vim.api.nvim_win_get_buf(winid)
+  if not util.is_oil_bufnr_strict(winbuf) then
+    return
+  end
+
+  -- Save the window's original options once, so we can restore them when the
+  -- window goes back to showing a non-oil buffer. Window-local options are
+  -- sticky to the *window*, not the buffer, so without this the oil values
+  -- (e.g. signcolumn=no) would leak into normal buffers shown later in the
+  -- same window.
+  local ok_saved, saved = pcall(vim.api.nvim_win_get_var, winid, 'oil_original_win_options')
+  if not ok_saved or type(saved) ~= 'table' then
+    local orig = {}
+    for k, _ in pairs(config.win_options) do
+      local ok, val = pcall(vim.api.nvim_get_option_value, k, { scope = 'local', win = winid })
+      if ok then
+        orig[k] = val
+      end
+    end
+    pcall(vim.api.nvim_win_set_var, winid, 'oil_original_win_options', orig)
+  end
 
   -- work around https://github.com/neovim/neovim/pull/27422
   vim.api.nvim_set_option_value('foldmethod', 'manual', { scope = 'local', win = winid })
@@ -293,6 +321,48 @@ M.set_win_options = function()
     for k, v in pairs(config.preview_win.win_options) do
       vim.api.nvim_set_option_value(k, v, { scope = 'local', win = winid })
     end
+  end
+end
+
+---Save the window's current options so they can be restored when the window
+---leaves an oil buffer. This must run while the window is still showing a
+---NON-oil buffer (e.g. BufLeave, or M.open before switching): Neovim core
+---restores a revisited oil buffer's remembered window options *before*
+---BufEnter fires, so saving in BufEnter would capture oil's own values.
+---@param winid? integer
+M.save_win_options = function(winid)
+  winid = winid or vim.api.nvim_get_current_win()
+  if not vim.api.nvim_win_is_valid(winid) then
+    return
+  end
+  -- Never overwrite a good save with oil's own values.
+  local winbuf = vim.api.nvim_win_get_buf(winid)
+  if not vim.api.nvim_buf_is_valid(winbuf) or util.is_oil_bufnr_strict(winbuf) then
+    return
+  end
+  local orig = {}
+  for k, _ in pairs(config.win_options) do
+    local ok, val = pcall(vim.api.nvim_get_option_value, k, { scope = 'local', win = winid })
+    if ok then
+      orig[k] = val
+    end
+  end
+  pcall(vim.api.nvim_win_set_var, winid, 'oil_original_win_options', orig)
+end
+
+---Restore window options saved by set_win_options, if any.
+---@param winid? integer
+M.restore_win_options = function(winid)
+  winid = winid or vim.api.nvim_get_current_win()
+  if not vim.api.nvim_win_is_valid(winid) then
+    return
+  end
+  local ok, saved = pcall(vim.api.nvim_win_get_var, winid, 'oil_original_win_options')
+  if ok and type(saved) == 'table' then
+    for k, v in pairs(saved) do
+      pcall(vim.api.nvim_set_option_value, k, v, { scope = 'local', win = winid })
+    end
+    pcall(vim.api.nvim_win_del_var, winid, 'oil_original_win_options')
   end
 end
 
@@ -711,7 +781,20 @@ M.initialize = function(bufnr)
   for k, v in pairs(config.buf_options) do
     vim.bo[bufnr][k] = v
   end
-  vim.api.nvim_buf_call(bufnr, M.set_win_options)
+  -- NOTE: win_options are window-local, not buffer-local. Only apply them to
+  -- windows that are actually displaying this oil buffer. The old code did
+  -- `vim.api.nvim_buf_call(bufnr, M.set_win_options)`, but nvim_buf_call only
+  -- swaps the *buffer*, not the window, so set_win_options (which uses
+  -- nvim_get_current_win) would stomp the options of whatever window happened
+  -- to be current — e.g. a normal buffer's window when a hidden oil buffer
+  -- gets initialized in the background (lazy-load on CmdlineEnter + BufAdd
+  -- sweep, SessionLoadPost, async normalize_url fallback to current win).
+  -- Hidden buffers get their win options later via the BufEnter autocmd.
+  for _, winid in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_buf(winid) == bufnr then
+      M.set_win_options(winid)
+    end
+  end
 
   vim.api.nvim_create_autocmd('BufHidden', {
     desc = 'Delete oil buffers when no longer in use',

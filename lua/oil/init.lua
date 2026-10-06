@@ -1212,11 +1212,24 @@ M.save = function(opts, cb)
 end
 
 local function restore_alt_buf()
-  if vim.bo.filetype == 'oil' then
+  -- NOTE: strict name-based check, not filetype. A normal buffer can carry a
+  -- poisoned filetype of "oil" if a `doautocmd BufReadPost <oil-url>` fired
+  -- while it was current (filetype detection matches the oil url, not the
+  -- buffer). Gating on filetype here would apply oil window options to normal
+  -- windows (e.g. signcolumn=no leaking on CmdlineEnter lazy-load).
+  if require('oil.util').is_oil_bufnr_strict() then
     require('oil.view').set_win_options()
     vim.api.nvim_win_set_var(0, 'oil_did_enter', true)
   elseif vim.w.oil_did_enter then
     vim.api.nvim_win_del_var(0, 'oil_did_enter')
+    -- Leaving an oil window: restore the window-local options oil overwrote
+    -- (e.g. signcolumn) so they don't leak into normal buffers in the same window.
+    require('oil.view').restore_win_options()
+    -- Self-heal a poisoned filetype (see NOTE above): buffer name is not an
+    -- oil url but filetype says "oil". Re-detect from the buffer name.
+    if vim.bo.filetype == 'oil' and vim.api.nvim_buf_get_name(0) ~= '' then
+      vim.cmd('filetype detect')
+    end
     -- We are entering a non-oil buffer *after* having been in an oil buffer
     local has_orig, orig_buffer = pcall(vim.api.nvim_win_get_var, 0, 'oil_original_buffer')
     if has_orig and vim.api.nvim_buf_is_valid(orig_buffer) then
@@ -1284,8 +1297,25 @@ M.load_oil_buffer = function(bufnr)
     -- Since this was async, we may have left the window with this buffer. People often write
     -- BufReadPre/Post autocmds with the expectation that the current window is the one that
     -- contains the buffer. Let's then do our best to make sure that that assumption isn't violated.
-    winid = util.buf_get_win(bufnr, winid) or vim.api.nvim_get_current_win()
-    vim.api.nvim_win_call(winid, function()
+    -- NOTE: if the oil buffer is not visible anywhere, do NOT fall back to the
+    -- current window: firing `doautocmd BufReadPre/Post <oil-url>` with an
+    -- unrelated normal buffer current makes filetype detection (and any other
+    -- `*` autocmds) act on the wrong buffer — e.g. the normal buffer gets
+    -- filetype=oil and then oil window options (signcolumn=no). Instead run in
+    -- buf_call so the oil buffer is current, and skip restore_alt_buf (no
+    -- window entered oil).
+    local target_win = util.buf_get_win(bufnr, winid)
+    local run_in
+    if target_win then
+      run_in = function(fn)
+        vim.api.nvim_win_call(target_win, fn)
+      end
+    else
+      run_in = function(fn)
+        vim.api.nvim_buf_call(bufnr, fn)
+      end
+    end
+    run_in(function()
       if new_url ~= bufname then
         if util.rename_buffer(bufnr, new_url) then
           -- If the buffer was replaced then don't initialize it. It's dead. The replacement will
@@ -1314,7 +1344,9 @@ M.load_oil_buffer = function(bufnr)
         vim.bo[bufnr].buftype = 'acwrite'
         adapter.read_file(bufnr)
       end
-      restore_alt_buf()
+      if target_win then
+        restore_alt_buf()
+      end
     end)
   end
 
@@ -1515,6 +1547,10 @@ M.setup = function(opts)
         vim.w.oil_original_view = vim.fn.winsaveview()
         ---@diagnostic disable-next-line: param-type-mismatch
         vim.w.oil_original_alternate = vim.fn.bufnr('#')
+        -- Snapshot the window options while they still belong to a normal
+        -- buffer (see save_win_options NOTE). Refresh on every leave so the
+        -- save never goes stale.
+        require('oil.view').save_win_options()
       end
     end,
   })
@@ -1615,6 +1651,11 @@ M.setup = function(opts)
       vim.w.oil_original_buffer = vim.w[parent_win].oil_original_buffer
       vim.w.oil_original_view = vim.w[parent_win].oil_original_view
       vim.w.oil_original_alternate = vim.w[parent_win].oil_original_alternate
+      local has_saved, saved_opts =
+        pcall(vim.api.nvim_win_get_var, parent_win, 'oil_original_win_options')
+      if has_saved and type(saved_opts) == 'table' then
+        vim.w.oil_original_win_options = saved_opts
+      end
     end,
   })
   -- mksession doesn't save oil buffers in a useful way. We have to manually load them after a
