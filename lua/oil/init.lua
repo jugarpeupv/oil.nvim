@@ -996,6 +996,10 @@ local function maybe_hijack_directory_buffer(bufnr)
   if not config.default_file_explorer then
     return false
   end
+
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
   local bufname = vim.api.nvim_buf_get_name(bufnr)
   if bufname == '' then
     return false
